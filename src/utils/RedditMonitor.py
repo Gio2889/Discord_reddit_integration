@@ -17,14 +17,18 @@ class RedditMonitor():
         self.session = None
         self.reddit = None
         self.max_retries = 3
-        self.tgt_flairs=os.getenv('SUBREDDIT_NAME')
+        self.subreddit_name=os.getenv('SUBREDDIT_NAME')
+        self.target_flairs=os.getenv('TARGET_FLAIRS')
+        print(self.target_flairs)
 
-    def _build_flair_query(self, flairs: List[str]) -> str:
-        """Build Reddit search query from flair list"""
+    def _build_flair_query(self, flairs: str) -> str:
+        """Build Reddit search query from flair list
+            comma separated str
+        """
         if not flairs:
             return None
-        
-        escaped_flairs = [f'flair:"{f.replace('"', '\\"')}"' for f in flairs]
+        flairs = flairs.split(",")
+        escaped_flairs = [f'flair:"{flair}"' for flair in flairs]
         
         if len(escaped_flairs) == 1:
             return escaped_flairs[0]
@@ -42,6 +46,7 @@ class RedditMonitor():
             )
 
     async def get_post_content(self, submission):
+            print("post found")
             content = f"**Title:** {submission.title}\n"
             if submission.is_self:
                 content += f"**Text:** {submission.selftext}"  
@@ -56,10 +61,8 @@ class RedditMonitor():
         retries = 0
         while retries < self.max_retries:
             try:
-                subreddit = await self.reddit.subreddit(os.getenv('SUBREDDIT_NAME')) # get subreddit 
-                #search_query = f'(flair:"Weapons/Armor Bsuild" OR flair:"Character Creation")'
-                search_query = self._build_flair_query(self.target_flair)
-                # test multiple subred and flairs here
+                subreddit = await self.reddit.subreddit(os.getenv('SUBREDDIT_NAME')) 
+                search_query = self._build_flair_query(self.target_flairs)
                 async for submission in subreddit.search(
                                                         query=search_query,
                                                         sort='new',
@@ -68,17 +71,18 @@ class RedditMonitor():
                                                     ):
                     try:
                         content = await self.get_post_content(submission)
-                        print(f"New post: {content}")
-
+                        
                         #content process will hapenned here
 
                         if submission.id not in self.processed_posts:
                             self.processed_posts.add(submission.id)
                     except Exception as e:
                         print(f"Error processing post {submission.id}: {e}")
+                        break
                 break
-            except (TooManyRequests, ServerError) as api_error:
+            except Exception as api_error:
                 print(f"API error encountered: {api_error}")
+                break
 
     def load_processed_posts(self):
         try:
@@ -98,7 +102,3 @@ async def main():
         print(monitor.processed_posts)
     finally:
         await monitor.close()
-
-if __name__ == '__main__':
-    asyncio.run(main())
-    exit(0)

@@ -1,16 +1,17 @@
 import os
 import discord
 from discord.ext import tasks, commands
-from RedditBot import RedditMonitor
+from utils.RedditMonitor import RedditMonitor
 
 class RedditBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        super().__init__(command_prefix='(.)(.)', intents=intents)
+        super().__init__(command_prefix='IA!', intents=intents)
         self.reddit_monitor = RedditMonitor()
-        self.post_channel_id = int(os.getenv('DISCORD_POST_CHANNEL'))
+        self.post_channel_id = os.getenv('DISCORD_POST_CHANNEL')
         self.check_interval = int(os.getenv('CHECK_INTERVAL'))# 2 hours in seconds
-
+        self.client = discord.Client(intents=intents)
+    
     async def setup_hook(self):
         await self.reddit_monitor.initialize()
         self.post_reddit_updates.start()
@@ -23,7 +24,7 @@ class RedditBot(commands.Bot):
                 return None, url  # Return separate image URL
         return discord.Embed(description=content), None
 
-    @tasks.loop(seconds=self.check_interval)
+    @tasks.loop(seconds=int(os.getenv('CHECK_INTERVAL')))
     async def post_reddit_updates(self):
         channel = self.get_channel(self.post_channel_id)
         if not channel:
@@ -47,16 +48,13 @@ class RedditBot(commands.Bot):
     async def before_post_updates(self):
         await self.wait_until_ready()
 
-    @commands.command()
-    async def checknow(ctx):
-        """Manually trigger Reddit check"""
-        await ctx.send("Checking for new posts...")
-        await self.post_reddit_updates()
+    # @bot.command()
+    # async def checknow(ctx):
+    #     """Manually trigger Reddit check"""
+    #     await ctx.send("Checking for new posts...")
+    #     await self.post_reddit_updates()
 
     async def close(self):
         await self.reddit_monitor.close()
         await super().close()
 
-if __name__ == '__main__':
-    bot = RedditBot()
-    bot.run('')
