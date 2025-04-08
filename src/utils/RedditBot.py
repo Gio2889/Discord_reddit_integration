@@ -6,9 +6,16 @@ from utils.RedditMonitor import RedditMonitor
 class RedditBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
+        print(intents)
+        intents.messages = True
+        intents.typing = True
+        intents.message_content = True
+        print(intents)
+        # intents.value = int(os.getenv('DISCORD_BOT_PERMISSIONS'))
+        # print(intents)
         super().__init__(command_prefix='IA!', intents=intents)
         self.reddit_monitor = RedditMonitor()
-        self.post_channel_id = os.getenv('DISCORD_POST_CHANNEL')
+        self.post_channel = os.getenv('DISCORD_POST_CHANNEL')
         self.check_interval = int(os.getenv('CHECK_INTERVAL'))# 2 hours in seconds
         self.client = discord.Client(intents=intents)
     
