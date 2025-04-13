@@ -1,6 +1,6 @@
 import os
 import discord
-from discord.ext import tasks, commands
+from discord.ext import commands,tasks
 from utils.RedditMonitor import RedditMonitor
 
 class RedditBotManager(commands.Bot):
@@ -18,8 +18,6 @@ class RedditBotManager(commands.Bot):
         await self.reddit_monitor.initialize()
         await self.reddit_monitor.get_subred()
         print("subreddit inital scan performed")
-        # print(f"These are the posts:\n {self.reddit_monitor.processed_posts}")
-        # print(f"These is the content:\n {self.reddit_monitor.post_content}")
     
     async def on_ready(self):
         print(f'We have logged in as {self.user}')
@@ -64,11 +62,12 @@ class CommandGroup(commands.Cog):
             await ctx.send(embed=embedVar)
     
     async def embed_gallery(self,parsed_content: dict):
-        embedVar = discord.Embed(title="New post!", 
-                                     description="New post has been found",
-                                     url=parsed_content["Link"],
-                                     color=0x00ff00)
-        
+        embedVar = discord.Embed(
+                                title="New post!", 
+                                description="New post has been found",
+                                url=parsed_content["Link"],
+                                color=0x00ff00
+                                )
         embedVar.add_field(name ="Post", value=parsed_content["Title"], inline=False)
         #embedVar.set_footer(text="Something for the bottom of the message")
         embeds = [embedVar]
@@ -103,7 +102,7 @@ class CommandGroup(commands.Cog):
                         results[current_key] = image_urls
                     else:
                         results[current_key] = part
-                    current_key = None  # Reset key for the next pair
+                    current_key = None
         return results
 
     

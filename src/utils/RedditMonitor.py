@@ -1,6 +1,5 @@
 import os
 import asyncpraw
-import asyncio
 import aiofiles
 from aiohttp import ClientSession
 from dotenv import load_dotenv
@@ -60,6 +59,8 @@ class RedditMonitor():
                         # if the post is not in the proceessed post list
                         if submission.id not in self.processed_posts:
                             content = await self.get_post_content(submission)
+                            if content is None:
+                                continue
                             self.post_content[submission.id] = content
                             self.processed_posts.add(submission.id)
                         #content process will hapenned here
@@ -85,7 +86,9 @@ class RedditMonitor():
                 for item in submission.gallery_data['items']:
                     media_id = item['media_id']
                     image_url = submission.media_metadata[media_id]['s']['u']  # 's' for small size, change as needed
-                    content += f"{image_url} "  
+                    content += f"{image_url} "
+            elif hasattr(submission, "is_video") and submission.is_video:
+                return 
             else:
                 content += f"**Link** {submission.url}"
             return  content
