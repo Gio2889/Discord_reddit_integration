@@ -18,17 +18,21 @@ class RedditBotManager(commands.Bot):
         await self.reddit_monitor.initialize()
         await self.reddit_monitor.get_subred()
         print("subreddit inital scan performed")
-        print(f"These are the posts:\n {self.reddit_monitor.processed_posts}")
+        # print(f"These are the posts:\n {self.reddit_monitor.processed_posts}")
+        # print(f"These is the content:\n {self.reddit_monitor.post_content}")
     
     async def on_ready(self):
         print(f'We have logged in as {self.user}')
-        await self.add_cog(CommandGroup(self))
+        await self.add_cog(CommandGroup(self.reddit_monitor))
 
     async def close(self):
         await self.reddit_monitor.close()  # This assumes that RedditMonitor has a close_session method
         await super().close() 
 
 class CommandGroup(commands.Cog):
+    def __init__(self,reddit_monitor):
+        self.reddit_monitor = reddit_monitor
+
     @commands.command(name="hello")
     async def hello(self, ctx):
         await ctx.send("Hello I am a bot.")
@@ -47,33 +51,60 @@ class CommandGroup(commands.Cog):
         """Manually trigger Reddit check"""
         await ctx.send("Checking for new posts...")
         await self.reddit_monitor.get_subred()
-        print("Scan subreddit performed")
-        print(f"These are the posts:\n {self.reddit_monitor.processed_posts}")
-    #     await self.post_reddit_updates()
+        await self.publish_content(self.reddit_monitor.post_content,ctx)
+        #after get subreddit runs the content of the latest posts is up and can be grabbed by the post_content method
 
-    #async def on_message(message):
-    #     print("message detected")
-    #     print(f"author: {message.author}")
-    #     print(f"channel: {message.channel}")
-    #     print(f"message: {message.content}")
-    #     print(f"client user: {bot.user}")
-    #     print(f"post channel is: {mngr.post_channel}")
-    #     print(f"{type(mngr.post_channel)}{type(message.channel)}")
-    #     if message.author == bot.user or str(message.channel) != mngr.post_channel:
-    #          return
-    #     if message.content.startswith('meow'):
-    #         embedVar = discord.Embed(title="YOU MEOWED", 
-    #                                  description="You have meowed"
-    #                                  , color=0x00ff00)
-    #         img_url = "some_jpeg_url.jpeg"
-    #         embedVar.add_field(name ="Field1", value="some messgae", inline=False)
-    #         embedVar.set_image(url = img_url)
-    #         #embedVar.add_field(name="Field2", value="hi2", inline=False)
-    #         embedVar.set_footer(text="Something for the bottom of the message")
-    #         await message.channel.send(embed=embedVar)
-    #     else:
-    #         await message.channel.send("message observed")
+    async def publish_content(self,post_content: dict,ctx):
+        for post_id,content_str in post_content.items():
+            parsed_content = await self.parse_reddit_post(content_str)
+            if '**Images**' in parsed_content:
+                embedVar = await self.embed_gallery(parsed_content)
+            else:
+                embedVar = await self.embed_post(parsed_content)
+            await ctx.send(embed=embedVar)
+    
+    async def embed_gallery(self,parsed_content: dict):
+        embedVar = discord.Embed(title="New post!", 
+                                     description="New post has been found",
+                                     url=parsed_content["Link"],
+                                     color=0x00ff00)
+        
+        embedVar.add_field(name ="Post", value=parsed_content["Title"], inline=False)
+        #embedVar.set_footer(text="Something for the bottom of the message")
+        embeds = [embedVar]
+        for image_url in parsed_content["Images"]:
+            temp_embed = discord.Embed()
+            temp_embed.set_image(url = image_url)
+            embeds.append(temp_embed)
+        return embeds
+        
+    async def embed_post(self,parsed_content):
+        print(parsed_content)
+        embedVar = discord.Embed(title="New post!", 
+                                     description="New post has been found"
+                                     ,url=parsed_content["Link"]
+                                     , color=0x00ff00)
+        embedVar.add_field(name ="Post", value=parsed_content["Title"], inline=False)
+        embedVar.set_image(url = parsed_content["Link"])
+        return embedVar
 
+    async def parse_reddit_post(self,content):
+        parts = content.split('**')   
+        results = {}
+        current_key = None
+        for part in parts:
+            part = part.strip()
+            if part:
+                if current_key is None:
+                    current_key = part
+                else:
+                    if current_key == "IMAGES":
+                        image_urls = [url.strip() for url in part.split() if url]
+                        results[current_key] = image_urls
+                    else:
+                        results[current_key] = part
+                    current_key = None  # Reset key for the next pair
+        return results
 
     
 
@@ -85,31 +116,5 @@ class CommandGroup(commands.Cog):
     #             return None, url  # Return separate image URL
     #     return discord.Embed(description=content), None
 
-    # @tasks.loop(seconds=int(os.getenv('CHECK_INTERVAL')))
-    # async def post_reddit_updates(self):
-    #     channel = self.get_channel(self.post_channel_id)
-    #     if not channel:
-    #         return
 
-    #     new_posts = await self.reddit_monitor.get_subred()
-    #     for post_content in new_posts:
-    #         try:
-    #             embed, image_url = self.format_reddit_post(post_content)
-                
-    #             if image_url:
-    #                 await channel.send(image_url)
-    #             elif embed:
-    #                 await channel.send(embed=embed)
-                
-    #             await asyncio.sleep(5)  # Rate limit protection
-    #         except Exception as e:
-    #             print(f"Failed to post content: {e}")
-
-    # @post_reddit_updates.before_loop
-    # async def before_post_updates(self):
-    #     await self.wait_until_ready()
-
-    # async def close(self):
-    #     await self.reddit_monitor.close()
-    #     await super().close()
 
