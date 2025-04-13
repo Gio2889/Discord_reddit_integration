@@ -1,6 +1,7 @@
 import os
 import asyncpraw
 import asyncio
+import aiofiles
 from aiohttp import ClientSession
 from dotenv import load_dotenv
 # import requests
@@ -45,6 +46,38 @@ class RedditMonitor():
             requestor_kwargs={"session": self.session},  # pass the custom Session instance
             )
 
+    async def get_subred(self, target_flair: bool = False):
+        if not self.reddit:
+            await self.initialize() # if reddit is not ready call initialization
+        retries = 0
+        while retries < self.max_retries:
+            try:
+                content = {}
+                subreddit = await self.reddit.subreddit(os.getenv('SUBREDDIT_NAME')) 
+                search_query = self._build_flair_query(self.target_flairs)
+                async for submission in subreddit.search(
+                                                        query=search_query,
+                                                        sort='new',
+                                                        limit=20,
+                                                        time_filter='all'
+                                                    ):
+                    try:
+                        # if the post is not in the proceessed post list
+                        if submission.id not in self.processed_posts:
+                            self.processed_posts.add(submission.id)
+                            content[submission.id] =  await self.get_post_content(submission)
+                        
+                        #content process will hapenned here
+                            
+                    except Exception as e:
+                        print(f"Error processing post {submission.id}: {e}")
+                        break
+                await self.save_processed_posts()
+                return content
+            except Exception as api_error:
+                print(f"API error encountered: {api_error}")
+                break
+
     async def get_post_content(self, submission):
             print("post found")
             content = f"**Title:** {submission.title}\n"
@@ -52,43 +85,20 @@ class RedditMonitor():
                 content += f"**Text:** {submission.selftext}"  
             else:
                 content += f"**Link:** {submission.url}"
-            return content
 
-    async def get_subred(self, target_flair: bool = False):
-        if not self.reddit:
-            await self.initialize() # if reddit is not ready call initialization
-        
-        retries = 0
-        while retries < self.max_retries:
-            try:
-                subreddit = await self.reddit.subreddit(os.getenv('SUBREDDIT_NAME')) 
-                search_query = self._build_flair_query(self.target_flairs)
-                async for submission in subreddit.search(
-                                                        query=search_query,
-                                                        sort='new',
-                                                        limit=10,
-                                                        time_filter='all'
-                                                    ):
-                    try:
-                        content = await self.get_post_content(submission)
-                        
-                        #content process will hapenned here
-
-                        if submission.id not in self.processed_posts:
-                            self.processed_posts.add(submission.id)
-                    except Exception as e:
-                        print(f"Error processing post {submission.id}: {e}")
-                        break
-                break
-            except Exception as api_error:
-                print(f"API error encountered: {api_error}")
-                break
+    async def save_processed_posts(self):
+        try:
+            with aiofiles.open('processed_posts.txt', 'w') as f:
+                f.writelines(f"{post_id}\n" for post_id in self.processed_posts)
+                print("print lines")
+        except Exception as e:
+            print(f"Error saving processed posts:\n {e}")
 
     def load_processed_posts(self):
         try:
             with open('processed_posts.txt', 'r') as f:
                 self.processed_posts = set(f.read().splitlines())
-        except FileNotFoundError: # if not post are saved we keep going 
+        except FileNotFoundError: # if no posts are saved, continue without error
             pass
     
     async def close(self):
