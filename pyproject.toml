@@ -9,4 +9,7 @@ dependencies = [
     "asyncpraw>=7.8.1",
     "discord>=2.3.2",
     "dotenv>=0.9.9",
+    "matplotlib>=3.10.1",
+    "pillow>=11.2.1",
+    "ruff>=0.11.5",
 ]
