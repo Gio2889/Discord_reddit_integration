@@ -15,8 +15,9 @@ class RedditMonitor:
         self.reddit = None
         self.max_retries = 3
         self.post_content: dict = {}
-        self.subreddit_name = os.getenv("SUBREDDIT_NAME")
+        self.subreddit_names = os.getenv("SUBREDDIT_NAME")
         self.target_flairs = os.getenv("TARGET_FLAIRS")
+        self.flair_query = self._build_flair_query(self.target_flairs)
 
     def _build_flair_query(self, flairs: str) -> str:
         """Build Reddit search query from flair list
@@ -44,17 +45,20 @@ class RedditMonitor:
             },  # pass the custom Session instance
         )
 
-    async def get_subred(self, target_flair: bool = False):
+    async def get_subred(self, subreddit_name: str ,flair_query: str):
         if not self.reddit:
             await self.initialize()  # if reddit is not ready call initialization
         retries = 0
         while retries < self.max_retries:
             try:
-                subreddit = await self.reddit.subreddit(os.getenv("SUBREDDIT_NAME"))
-                search_query = self._build_flair_query(self.target_flairs)
-                async for submission in subreddit.search(
-                    query=search_query, sort="new", limit=5, time_filter="all"
-                ):
+                subreddit = await self.reddit.subreddit(subreddit_name)
+                if flair_query is None:
+                    reddit_query = subreddit.new(limit=2)
+                else:
+                    reddit_query = subreddit.search(
+                                    query=self.flair_query, sort="new", limit=2, time_filter="all"
+                                    )
+                async for submission in reddit_query:
                     try:
                         # if the post is not in the proceessed post list
                         if submission.id not in self.processed_posts:
@@ -68,12 +72,20 @@ class RedditMonitor:
                     except Exception as e:
                         print(f"Error processing post {submission.id}: {e}")
                         break
-                print("post should be saved here")
                 # await self.save_processed_posts()
                 return self.post_content
             except Exception as api_error:
                 print(f"API error encountered: {api_error}")
                 break
+    
+    async def get_posts(self):
+        subreddit_list = self.subreddit_names.split(",")
+        if len(subreddit_list) == 1:
+            await self.get_subred(subreddit_list[0],self.flair_query)
+        else:
+            for subreddit in subreddit_list:
+                #print(f"getting subreddit {subreddit};flairs {self.flair_query}")
+                await self.get_subred(subreddit,self.flair_query)
 
     async def get_post_content(self, submission):
         await submission.load()
@@ -116,11 +128,12 @@ class RedditMonitor:
         if self.session:
             await self.session.close()
 
-
-async def main():
-    monitor = RedditMonitor()
-    try:
-        await monitor.get_subred()
-        print(monitor.processed_posts)
-    finally:
-        await monitor.close()
+    
+    
+# async def main():
+#     monitor = RedditMonitor()
+#     try:
+#         await monitor.get_subred()
+#         print(monitor.processed_posts)
+#     finally:
+#         await monitor.close()

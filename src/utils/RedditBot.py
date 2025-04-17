@@ -18,7 +18,7 @@ class RedditBotManager(commands.Bot):
 
     async def setup_hook(self):
         await self.reddit_monitor.initialize()
-        await self.reddit_monitor.get_subred()
+        await self.reddit_monitor.get_posts()
         print("subreddit inital scan performed")
 
     async def on_ready(self):
@@ -28,13 +28,14 @@ class RedditBotManager(commands.Bot):
     async def close(self):
         await (
             self.reddit_monitor.close()
-        )  # This assumes that RedditMonitor has a close_session method
+        )  
         await super().close()
 
 
 class CommandGroup(commands.Cog):
     def __init__(self, reddit_monitor):
         self.reddit_monitor = reddit_monitor
+        self.published_posts = []
 
     @commands.command(name="hello")
     async def hello(self, ctx):
@@ -44,19 +45,21 @@ class CommandGroup(commands.Cog):
     async def checknow(self, ctx):
         """Manually trigger Reddit check"""
         await ctx.send("Checking for new posts...")
-        await self.reddit_monitor.get_subred()
+        await self.reddit_monitor.get_posts()
         await self.publish_content(self.reddit_monitor.post_content, ctx)
         # after get subreddit runs the content of the latest posts is up and can be grabbed by the post_content method
 
     async def publish_content(self, post_content: dict, ctx):
         for post_id, content_str in post_content.items():
-            parsed_content = await self.parse_reddit_post(content_str)
-            if "Images" in parsed_content:
-                embedVar, attachment_file = await self.embed_gallery(parsed_content)
-                await ctx.send(embed=embedVar, file=attachment_file)
-            else:
-                embedVar = await self.embed_post(parsed_content)
-                await ctx.send(embed=embedVar)
+            if post_id not in self.published_posts:
+                parsed_content = await self.parse_reddit_post(content_str)
+                if "Images" in parsed_content:
+                    embedVar, attachment_file = await self.embed_gallery(parsed_content)
+                    await ctx.send(embed=embedVar, file=attachment_file)
+                else:
+                    embedVar = await self.embed_post(parsed_content)
+                    await ctx.send(embed=embedVar)
+                self.published_posts.append(post_id)
 
     async def embed_gallery(self, parsed_content: dict):
         # Create main embed
