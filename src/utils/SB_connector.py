@@ -7,4 +7,9 @@ class SupabaseConnector():
         self.key: str = os.environ.get("SUPABASE_KEY")
         self.supabase: Client = create_client(self.url, self.key)
         
-
+    def insert_entry():
+        pass
+    def insert_entries():
+        pass
+    def check_entries():
+        pass

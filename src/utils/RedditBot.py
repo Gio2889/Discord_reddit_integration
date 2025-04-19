@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands, tasks
+from discord.utils import get
 from utils.RedditMonitor import RedditMonitor
 from utils.mosaic_maker import mosaic_maker
 
@@ -11,25 +12,59 @@ class RedditBotManager(commands.Bot):
         intents.messages = True
         intents.typing = True
         intents.message_content = True
+        self.auto_post = False 
         self.reddit_monitor = RedditMonitor()
-        self.post_channel = os.getenv("DISCORD_POST_CHANNEL")
-        self.check_interval = int(os.getenv("CHECK_INTERVAL"))  # 2 hours in seconds
+        self.post_channel = int(os.getenv("DISCORD_POST_CHANNEL")) #has been changed to ID
+        self.check_interval = 20
+        self.command_group = None
+        #self.check_interval = int(os.getenv("CHECK_INTERVAL"))  # 2 hours in seconds
         super().__init__(command_prefix="!", intents=intents)
+        
 
     async def setup_hook(self):
-        await self.reddit_monitor.initialize()
-        await self.reddit_monitor.get_posts()
-        print("subreddit inital scan performed")
+        """This fucntion runs before on-ready"""
+        pass
+    
 
     async def on_ready(self):
         print(f"We have logged in as {self.user}")
-        await self.add_cog(CommandGroup(self.reddit_monitor))
+        print("Bot ready")
+        self.command_group = CommandGroup(self.reddit_monitor)
+        await self.add_cog(self.command_group)
+        print("Initializing Reddit Monitor")
+        await self.reddit_monitor.initialize()
+        await self.reddit_monitor.get_posts()
+        print("Post gathered")
+
+        self.post_channel = self.get_channel(self.post_channel)
+        if self.post_channel:
+            await self.command_group.execute_checknow(self.post_channel)
+        else:
+            print("Channel not found.")
+
+        # switch to trigger automatic updates
+        if self.auto_post:
+            self.checknow_task.change_interval(seconds=self.check_interval)
+            self.checknow_task.start()
+
+    @tasks.loop(seconds=20)
+    async def checknow_task(self):
+        print("check will be run here")
+        if self.post_channel:
+            await self.commandgroup.execute_checknow(self.post_channel)
+        else:
+            print("Channel not found.")
+
+    checknow_task.before_loop
+    async def before_checknow_task(self):
+        print("from before the loop")
+        await self.wait_until_ready() 
 
     async def close(self):
-        await (
-            self.reddit_monitor.close()
-        )  
+        self.checknow_task.stop()
+        await ( self.reddit_monitor.close() )  
         await super().close()
+
 
 
 class CommandGroup(commands.Cog):
@@ -44,6 +79,10 @@ class CommandGroup(commands.Cog):
     @commands.command()
     async def checknow(self, ctx):
         """Manually trigger Reddit check"""
+        await self.excecute_checknow(ctx)
+
+    async def execute_checknow(self,ctx):
+        """Logic for check now. With this separation can now be called outside."""
         await ctx.send("Checking for new posts...")
         await self.reddit_monitor.get_posts()
         await self.publish_content(self.reddit_monitor.post_content, ctx)
@@ -65,7 +104,7 @@ class CommandGroup(commands.Cog):
         # Create main embed
         embedVar = discord.Embed(
             title=parsed_content["Title"],
-            description="New post has been found",
+            description=f"New post by {parsed_content["Author"]}",
             url=parsed_content["Link"],
             color=0x00FF00,
         )
@@ -85,7 +124,7 @@ class CommandGroup(commands.Cog):
     async def embed_post(self, parsed_content):
         embedVar = discord.Embed(
             title=parsed_content["Title"],
-            description="New post has been found",
+            description=f"New post by {parsed_content["Author"]}",
             url=parsed_content["Link"],
             color=0x00FF00,
         )

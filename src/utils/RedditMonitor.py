@@ -90,6 +90,7 @@ class RedditMonitor:
     async def get_post_content(self, submission):
         await submission.load()
         content = f"**Title** {submission.title}\n"
+        content += f"**Author** {submission.author}\n"
         if submission.is_self:
             content += f"**Text** {submission.selftext}"
         elif hasattr(submission, "is_gallery") and submission.is_gallery:
