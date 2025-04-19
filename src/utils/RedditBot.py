@@ -86,9 +86,13 @@ class CommandGroup(commands.Cog):
         await ctx.send("Checking for new posts...")
         await self.reddit_monitor.get_posts()
         await self.publish_content(self.reddit_monitor.post_content, ctx)
+
         # after get subreddit runs the content of the latest posts is up and can be grabbed by the post_content method
 
     async def publish_content(self, post_content: dict, ctx):
+        if ctx.channel != 823034880710672394:
+            ctx.send("Im not authorized to publish in this channel")
+            return
         for post_id, content_str in post_content.items():
             if post_id not in self.published_posts:
                 parsed_content = await self.parse_reddit_post(content_str)
@@ -98,7 +102,14 @@ class CommandGroup(commands.Cog):
                 else:
                     embedVar = await self.embed_post(parsed_content)
                     await ctx.send(embed=embedVar)
-                self.published_posts.append(post_id)
+                self.published_posts.append(
+                        {
+                            'id' : post_id,
+                            'title' : parsed_content["Title"],
+                            'author' : parsed_content["Author"]
+                        }
+                        )
+        # update supabase here
 
     async def embed_gallery(self, parsed_content: dict):
         # Create main embed
