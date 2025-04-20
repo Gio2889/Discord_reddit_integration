@@ -4,6 +4,7 @@ from discord.ext import commands, tasks
 from discord.utils import get
 from utils.RedditMonitor import RedditMonitor
 from utils.mosaic_maker import mosaic_maker
+from utils.SB_connector import SupabaseConnector
 
 
 class RedditBotManager(commands.Bot):
@@ -12,8 +13,9 @@ class RedditBotManager(commands.Bot):
         intents.messages = True
         intents.typing = True
         intents.message_content = True
-        self.auto_post = False 
+        self.auto_post = True
         self.reddit_monitor = RedditMonitor()
+        self.supabase = SupabaseConnector()
         self.post_channel = int(os.getenv("DISCORD_POST_CHANNEL")) #has been changed to ID
         self.check_interval = 20
         self.command_group = None
@@ -29,35 +31,32 @@ class RedditBotManager(commands.Bot):
     async def on_ready(self):
         print(f"We have logged in as {self.user}")
         print("Bot ready")
-        self.command_group = CommandGroup(self.reddit_monitor)
+        #updating class defaults after the bot initiates
+        self.post_channel = self.get_channel(self.post_channel)
+        self.command_group = CommandGroup(self.reddit_monitor,self.supabase,self.post_channel)
         await self.add_cog(self.command_group)
+        
+
+        #get reddit post informations
         print("Initializing Reddit Monitor")
         await self.reddit_monitor.initialize()
-        await self.reddit_monitor.get_posts()
-        print("Post gathered")
+        
+        # switch to trigger automatic updates
+        #TEST: check to see if starting the tasks run the loop
+        if self.auto_post:
+            self.checknow_task.change_interval(seconds=self.check_interval)
+            self.checknow_task.start()
 
-        self.post_channel = self.get_channel(self.post_channel)
+
+    @tasks.loop(seconds=20)
+    async def checknow_task(self):
         if self.post_channel:
             await self.command_group.execute_checknow(self.post_channel)
         else:
             print("Channel not found.")
 
-        # switch to trigger automatic updates
-        if self.auto_post:
-            self.checknow_task.change_interval(seconds=self.check_interval)
-            self.checknow_task.start()
-
-    @tasks.loop(seconds=20)
-    async def checknow_task(self):
-        print("check will be run here")
-        if self.post_channel:
-            await self.commandgroup.execute_checknow(self.post_channel)
-        else:
-            print("Channel not found.")
-
     checknow_task.before_loop
     async def before_checknow_task(self):
-        print("from before the loop")
         await self.wait_until_ready() 
 
     async def close(self):
@@ -68,10 +67,12 @@ class RedditBotManager(commands.Bot):
 
 
 class CommandGroup(commands.Cog):
-    def __init__(self, reddit_monitor):
+    def __init__(self, reddit_monitor,supabase,authorised_channel):
         self.reddit_monitor = reddit_monitor
+        self.supabase = supabase
         self.published_posts = []
-
+        self.authorised_channel = authorised_channel
+        
     @commands.command(name="hello")
     async def hello(self, ctx):
         await ctx.send("Hello I am a bot.")
@@ -79,20 +80,36 @@ class CommandGroup(commands.Cog):
     @commands.command()
     async def checknow(self, ctx):
         """Manually trigger Reddit check"""
-        await self.excecute_checknow(ctx)
+        if ctx.channel.id != self.authorised_channel.id:
+            await ctx.send("Im not authorized to publish in this channel")
+            return
+        await self.execute_checknow(ctx)
 
     async def execute_checknow(self,ctx):
         """Logic for check now. With this separation can now be called outside."""
         await ctx.send("Checking for new posts...")
         await self.reddit_monitor.get_posts()
-        await self.publish_content(self.reddit_monitor.post_content, ctx)
 
-        # after get subreddit runs the content of the latest posts is up and can be grabbed by the post_content method
+        # update processed post and post contents 
+        self.reddit_monitor.processed_posts = set([
+        post for post in self.reddit_monitor.processed_posts if post not in self.supabase.database_ids
+        ])
+
+        self.reddit_monitor.post_content = {
+            post_id: content for post_id, content in self.reddit_monitor.post_content.items() if post_id not in self.supabase.database_ids
+        }
+        
+        #break out if there are no new posts
+        if not self.reddit_monitor.post_content:
+            await ctx.send("No new content to process.")
+            return
+
+        await self.publish_content(self.reddit_monitor.post_content, ctx)
+        # repopulate the database_ids after it gets edited by publish_content
+        self.supabase.database_ids = self.supabase.get_post_ids()
+        
 
     async def publish_content(self, post_content: dict, ctx):
-        if ctx.channel != 823034880710672394:
-            ctx.send("Im not authorized to publish in this channel")
-            return
         for post_id, content_str in post_content.items():
             if post_id not in self.published_posts:
                 parsed_content = await self.parse_reddit_post(content_str)
@@ -110,6 +127,9 @@ class CommandGroup(commands.Cog):
                         }
                         )
         # update supabase here
+        self.supabase.insert_entries(self.published_posts)
+
+
 
     async def embed_gallery(self, parsed_content: dict):
         # Create main embed

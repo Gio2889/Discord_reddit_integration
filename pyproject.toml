@@ -12,5 +12,6 @@ dependencies = [
     "matplotlib>=3.10.1",
     "pillow>=11.2.1",
     "ruff>=0.11.5",
+    "structlog>=25.2.0",
     "supabase>=2.15.0",
 ]

@@ -45,7 +45,7 @@ class RedditMonitor:
             },  # pass the custom Session instance
         )
 
-    async def get_subred(self, subreddit_name: str ,flair_query: str):
+    async def get_subred(self, subreddit_name: str ,flair_query: str,limit:int = 2):
         if not self.reddit:
             await self.initialize()  # if reddit is not ready call initialization
         retries = 0
@@ -56,7 +56,7 @@ class RedditMonitor:
                     reddit_query = subreddit.new(limit=2)
                 else:
                     reddit_query = subreddit.search(
-                                    query=self.flair_query, sort="new", limit=2, time_filter="all"
+                                    query=self.flair_query, sort="new", limit=limit, time_filter="all"
                                     )
                 async for submission in reddit_query:
                     try:
