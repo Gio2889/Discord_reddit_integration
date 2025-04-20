@@ -45,7 +45,7 @@ class RedditMonitor:
             },  # pass the custom Session instance
         )
 
-    async def get_subred(self, subreddit_name: str ,flair_query: str,limit:int = 2):
+    async def get_subred(self, subreddit_name: str, flair_query: str, limit: int = 2):
         if not self.reddit:
             await self.initialize()  # if reddit is not ready call initialization
         retries = 0
@@ -56,8 +56,11 @@ class RedditMonitor:
                     reddit_query = subreddit.new(limit=2)
                 else:
                     reddit_query = subreddit.search(
-                                    query=self.flair_query, sort="new", limit=limit, time_filter="all"
-                                    )
+                        query=self.flair_query,
+                        sort="new",
+                        limit=limit,
+                        time_filter="all",
+                    )
                 async for submission in reddit_query:
                     try:
                         # if the post is not in the proceessed post list
@@ -77,15 +80,15 @@ class RedditMonitor:
             except Exception as api_error:
                 print(f"API error encountered: {api_error}")
                 break
-    
+
     async def get_posts(self):
         subreddit_list = self.subreddit_names.split(",")
         if len(subreddit_list) == 1:
-            await self.get_subred(subreddit_list[0],self.flair_query)
+            await self.get_subred(subreddit_list[0], self.flair_query)
         else:
             for subreddit in subreddit_list:
-                #print(f"getting subreddit {subreddit};flairs {self.flair_query}")
-                await self.get_subred(subreddit,self.flair_query)
+                # print(f"getting subreddit {subreddit};flairs {self.flair_query}")
+                await self.get_subred(subreddit, self.flair_query)
 
     async def get_post_content(self, submission):
         await submission.load()
@@ -95,7 +98,7 @@ class RedditMonitor:
             content += f"**Text** {submission.selftext}"
         elif hasattr(submission, "is_gallery") and submission.is_gallery:
             content += f"**Link** {submission.url} "
-            content += f"**Images** "
+            content += "**Images** "
             for item in submission.gallery_data["items"]:
                 media_id = item["media_id"]
                 image_url = submission.media_metadata[media_id]["s"][
@@ -129,8 +132,7 @@ class RedditMonitor:
         if self.session:
             await self.session.close()
 
-    
-    
+
 # async def main():
 #     monitor = RedditMonitor()
 #     try:
