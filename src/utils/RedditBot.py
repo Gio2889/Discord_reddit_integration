@@ -1,9 +1,11 @@
 import os
 import discord
+from datetime import datetime,timedelta,timezone
 from discord.ext import commands, tasks
 from utils.RedditMonitor import RedditMonitor
 from utils.mosaic_maker import mosaic_maker
 from utils.SB_connector import SupabaseConnector
+
 
 
 class RedditBotManager(commands.Bot):
@@ -12,13 +14,15 @@ class RedditBotManager(commands.Bot):
         intents.messages = True
         intents.typing = True
         intents.message_content = True
+        intents.emojis_and_stickers = True
+        intents.reactions = True
         self.auto_post = True
         self.reddit_monitor = RedditMonitor()
         self.supabase = SupabaseConnector()
         self.post_channel = int(
             os.getenv("DISCORD_POST_CHANNEL")
         )  # has been changed to ID
-        self.check_interval = 20
+        self.check_interval = 7200
         self.command_group = None
         # self.check_interval = int(os.getenv("CHECK_INTERVAL"))  # 2 hours in seconds
         super().__init__(command_prefix="!", intents=intents)
@@ -83,6 +87,57 @@ class CommandGroup(commands.Cog):
             await ctx.send("Im not authorized to publish in this channel")
             return
         await self.execute_checknow(ctx)
+
+    @commands.command(name="fetch_images_reactions")
+    async def fetch_images_reactions(self, ctx, days: int):
+        """Fetch all images and reactions from the last 'days' days."""
+        if ctx.channel.id != self.authorised_channel.id:
+            await ctx.send("I'm not authorized to retrieve messages from this channel.")
+            return
+
+        # Calculate the cut-off time
+        cut_off_time = datetime.now(timezone.utc) - timedelta(days=3)
+        print(cut_off_time)
+        image_reactions = []
+        messages=[]
+        async for message in ctx.channel.history(limit=100): # Adjust limit as necessary
+            messages.append(
+                {
+                "msg" : message.content,
+                "timestmp" : message.created_at,
+                "reactions" : message.reactions,
+                "attch" : message.attachments,
+                "embeds" : message.embeds,
+                "pic link" : message.content.endswith((".jpg",".jpeg",".png"))
+                }
+            )
+            if message.created_at > cut_off_time:
+                if message.embeds:  # Check if there are embeds
+                    for embed in message.embeds:
+                        if str(embed.url).endswith
+                        print(dir(embed))
+                        print(f"{message.id} is wihtin the time frame and has an embed")
+                        print(embed.type)
+                        print(embed.url)
+                        print(embed.title)
+                        print(embed.set_image)
+                        if embed.type == 'image':
+                            
+                            image_url = embed.url  # Get image URL
+                            reactions = self.collect_reactions(message)  # Collect reactions
+                            image_reactions.append({
+                                'image_url': image_url,
+                                'reactions': reactions
+                            })
+
+        # Send a summary of images and their reactions
+        if image_reactions:
+            await ctx.send(f"Found {len(image_reactions)} images in the last {days} days.")
+            for item in image_reactions:
+                await ctx.send(f"Image: {item['image_url']}\nReactions: {item['reactions']}")
+        else:
+            await ctx.send(f"No images found in the last {days} days.")
+        # [print(f"{message}\n") for  message in messages]
 
     async def execute_checknow(self, ctx):
         """Logic for check now. With this separation can now be called outside."""
@@ -182,3 +237,10 @@ class CommandGroup(commands.Cog):
                         results[current_key] = part
                     current_key = None
         return results
+
+    def collect_reactions(self, message):
+            """Collects reaction counts from the given message."""
+            reaction_data = {}
+            for reaction in message.reactions:
+                reaction_data[reaction.emoji] = reaction.count
+            return reaction_data
