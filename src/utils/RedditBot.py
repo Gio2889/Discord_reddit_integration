@@ -236,20 +236,25 @@ class CommandGroup(commands.Cog):
         for post_id, content_str in post_content.items():
             if post_id not in self.posted_ids:
                 parsed_content = await self.parse_reddit_post(content_str)
+                if 'Link' not in list(parsed_content.keys()): # no link available; skip
+                    continue
                 if "Images" in parsed_content:
                     embedVar, attachment_file = await self.embed_gallery(parsed_content)
-                    message = await ctx.send(embed=embedVar, file=attachment_file)
+                    if embedVar:
+                        message = await ctx.send(embed=embedVar, file=attachment_file)
                 else:
                     embedVar = await self.embed_post(parsed_content)
-                    message = await ctx.send(embed=embedVar)
-                await self.add_reactions_to_message(message, emoji_list)
-                self.published_posts.append(
-                    {
-                        "id": post_id,
-                        "title": parsed_content["Title"],
-                        "author": parsed_content["Author"],
-                    }
-                )
+                    if embedVar:
+                        message = await ctx.send(embed=embedVar)
+                if message: #if post was succesfully posted
+                    await self.add_reactions_to_message(message, emoji_list)
+                    self.published_posts.append(
+                        {
+                            "id": post_id,
+                            "title": parsed_content["Title"],
+                            "author": parsed_content["Author"],
+                        }
+                    )
         if self.supabase:
             self.supabase.insert_entries(self.published_posts)
         else:
@@ -269,12 +274,22 @@ class CommandGroup(commands.Cog):
         Raises:
             Any exceptions related to image processing.
         """
-        embedVar = discord.Embed(
-            title=parsed_content["Title"],
-            description=f"New post by {parsed_content['Author']}",
-            url=parsed_content["Link"],
-            color=0x00FF00,
-        )
+        try:
+            embedVar = discord.Embed(
+                title=parsed_content["Title"],
+                description=f"New post by {parsed_content['Author']}",
+                url=parsed_content["Link"],
+                color=0x00FF00,
+            )
+        except KeyError as e:
+            print(f"Missing key in parsed content: {e}")
+            print(f"Item Content: {parsed_content}")
+            return None,None
+        except Exception as e:
+            print(f"error creating embeded content;\n{e}")
+            print(f"Item Content: {parsed_content}")
+            return None,None
+        
         image_list = parsed_content["Images"].split(" ")
 
         # Fetch images and create a composite if necessary
@@ -299,14 +314,21 @@ class CommandGroup(commands.Cog):
         Raises:
             Any exceptions related to the embed creation.
         """
-        embedVar = discord.Embed(
-            title=parsed_content["Title"],
-            description=f"New post by {parsed_content['Author']}",
-            url=parsed_content["Link"],
-            color=0x00FF00,
-        )
-        embedVar.set_image(url=parsed_content["Link"])
-        return embedVar
+        try:
+            embedVar = discord.Embed(
+                title=parsed_content["Title"],
+                description=f"New post by {parsed_content['Author']}",
+                url=parsed_content["Link"],
+                color=0x00FF00,
+            )
+            embedVar.set_image(url=parsed_content["Link"])
+            return embedVar
+        except Exception as e:
+            print('Error creating embed content')
+            return None
+        
+        
+        
 
     async def parse_reddit_post(self, content):
         """
