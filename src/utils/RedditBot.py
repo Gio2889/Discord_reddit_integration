@@ -8,7 +8,7 @@ from utils.SB_connector import SupabaseConnector
 
 
 class RedditBotManager(commands.Bot):
-    def __init__(self, Supabase: bool =True):
+    def __init__(self, Supabase: bool =False):
         intents = discord.Intents.default()
         intents.messages = True
         intents.typing = True
@@ -24,7 +24,7 @@ class RedditBotManager(commands.Bot):
         )  # has been changed to ID
         self.check_interval = 20
         self.command_group = None
-        # self.check_interval = int(os.getenv("CHECK_INTERVAL"))  # 2 hours in seconds
+        self.check_interval = int(os.getenv("CHECK_INTERVAL"))  # 2 hours in seconds
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
@@ -40,7 +40,6 @@ class RedditBotManager(commands.Bot):
             self.reddit_monitor, self.supabase, self.post_channel
         )
         await self.add_cog(self.command_group)
-
         # get reddit post informations
         print("Initializing Reddit Monitor")
         await self.reddit_monitor.initialize()
@@ -50,6 +49,15 @@ class RedditBotManager(commands.Bot):
         if self.auto_post:
             self.checknow_task.change_interval(seconds=self.check_interval)
             self.checknow_task.start()
+
+    async def on_message(self, message):
+        if message.channel.id == self.post_channel.id:
+            if (message.attachments or message.embeds) and "gif" not in message.content.lower():
+                emoji_name_list = ["rate_0","CherryTomato","GreenPepper","YellowPepper","CarolinaReaper","FIRE"]
+                emoji_list = [await self.command_group.get_emoji_by_name(message,emoji_name) for emoji_name in emoji_name_list]
+                await self.command_group.add_reactions_to_message(message, emoji_list)  # Example reactions
+        # Call the default on_message handler to ensure other commands still work
+        await super().on_message(message)
 
     @tasks.loop(seconds=20)
     async def checknow_task(self):
@@ -77,7 +85,7 @@ class CommandGroup(commands.Cog):
             #switch to local doc for tracking post
             self.posted_ids = self.supabase.database_ids
         else:
-            self.posted_ids = self._get_local_id()
+            self.posted_ids = self._get_local_ids()
 
         self.published_posts = []
         self.authorised_channel = authorised_channel
@@ -125,12 +133,13 @@ class CommandGroup(commands.Cog):
         if self.supabase:
             self.supabase.database_ids = self.supabase.get_post_ids()
 
-
     async def publish_content(self, post_content: dict, ctx):
+        print("--- test ---")
+        
         emoji_name_list = ["rate_0","CherryTomato","GreenPepper","YellowPepper","CarolinaReaper","FIRE"]
-        emoji_list = [self.get_emoji_by_name(ctx,emoji_name) for emoji_name in emoji_name_list]
+        emoji_list = [await self.get_emoji_by_name(ctx,emoji_name) for emoji_name in emoji_name_list]
         for post_id, content_str in post_content.items():
-            if post_id not in self.published_posts:
+            if post_id not in self.posted_ids:
                 parsed_content = await self.parse_reddit_post(content_str)
                 if "Images" in parsed_content:
                     embedVar, attachment_file = await self.embed_gallery(parsed_content)
@@ -138,7 +147,7 @@ class CommandGroup(commands.Cog):
                 else:
                     embedVar = await self.embed_post(parsed_content)
                     message = await ctx.send(embed=embedVar)
-                self.add_reactions_to_message(message,emoji_list)
+                await self.add_reactions_to_message(message,emoji_list)
                 self.published_posts.append(
                     {
                         "id": post_id,
@@ -202,7 +211,7 @@ class CommandGroup(commands.Cog):
                     current_key = None
         return results
 
-    async def get_emoji_by_name(ctx, emoji_name):
+    async def get_emoji_by_name(self,ctx, emoji_name):
         """Get a custom emoji object from a guild by its name."""
         guild = ctx.guild
         if guild:
@@ -211,7 +220,7 @@ class CommandGroup(commands.Cog):
                     return emoji
         return None
 
-    async def add_reactions_to_message(message, emoji_list):
+    async def add_reactions_to_message(self,message, emoji_list):
         """Add a list of emoji reactions to a message."""
         for emoji in emoji_list:
             await message.add_reaction(emoji)
@@ -231,15 +240,25 @@ class CommandGroup(commands.Cog):
     def update_posted_ids(self):
         """Update posted_ids.csv with the current published posts."""
         file_path = 'posted_ids.csv'
-        # Ensure the published_posts are being recorded
-        with open(file_path, mode='w', newline='', encoding='utf-8') as file:
-            fieldnames = ['id', 'title', 'author']
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
+        fieldnames = ['id', 'title', 'author']
+        
+        # Open the file in append mode
+        file_mode = 'a' if os.path.exists(file_path) else 'w'
 
-            writer.writeheader()  # Write header for the CSV
+        with open(file_path, mode=file_mode, newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            
+            # Write header only if in write mode (new file)
+            if file_mode == 'w':
+                writer.writeheader()  # Write header for the CSV
+            
+            # Write the published posts
             for post in self.published_posts:
-                writer.writerow({ 
+                writer.writerow({
                     'id': post["id"],
                     'title': post["title"],
                     'author': post["author"]
                 })
+
+        for post in self.published_posts:
+            self.posted_ids.append(post['id'])
