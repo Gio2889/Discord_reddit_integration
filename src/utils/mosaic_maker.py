@@ -5,6 +5,18 @@ import matplotlib.pyplot as plt
 
 
 async def imager_puller(image_list: list[str]):
+    """
+    Fetch images from given URLs asynchronously.
+
+    Args:
+        image_list (list[str]): List of image URLs to fetch.
+
+    Returns:
+        list[Image]: A list of PIL Image objects fetched from the URLs.
+
+    Raises:
+        Exception: If there is an error in fetching the image.
+    """
     async with aiohttp.ClientSession() as session:
         images = []
         for url in image_list:
@@ -19,6 +31,18 @@ async def imager_puller(image_list: list[str]):
 
 
 async def mosaic_maker(image_list: list[str]):
+    """
+    Create a mosaic from a list of image URLs.
+
+    Args:
+        image_list (list[str]): List of image URLs.
+
+    Returns:
+        BytesIO: A bytes buffer of the saved composite image.
+
+    Raises:
+        Exception: If there are no images provided.
+    """
     images = await imager_puller(image_list)
 
     if images:
@@ -50,7 +74,6 @@ async def mosaic_maker(image_list: list[str]):
 
         plt.tight_layout()
 
-        # Save composite image to bytes buffer
         buf = BytesIO()
         plt.savefig(
             buf, format="png", bbox_inches="tight", pad_inches=0, transparent=True
