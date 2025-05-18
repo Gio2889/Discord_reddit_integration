@@ -1,5 +1,3 @@
-markdown
-
 # Reddit Discord Bot
 
 A Discord bot that monitors Reddit posts and shares them in a designated Discord channel.
