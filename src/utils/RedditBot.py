@@ -1,10 +1,11 @@
 import os
 import discord
 import csv
+import logging
 from discord.ext import commands, tasks
-from utils.RedditMonitor import RedditMonitor
-from utils.mosaic_maker import mosaic_maker
-from utils.SB_connector import SupabaseConnector
+from .RedditMonitor import RedditMonitor
+from .mosaic_maker import mosaic_maker
+from .SB_connector import SupabaseConnector
 
 
 class RedditBotManager(commands.Bot):
@@ -35,6 +36,7 @@ class RedditBotManager(commands.Bot):
             os.getenv("CHECK_INTERVAL")
         )  # Update check interval from environment
         super().__init__(command_prefix="!", intents=intents)
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     async def setup_hook(self):
         """Runs before the bot is ready. Override to implement custom setup."""
@@ -46,8 +48,8 @@ class RedditBotManager(commands.Bot):
         This function sets up the command group, initializes the Reddit monitor,
         and starts scheduled tasks for automatic posting.
         """
-        print(f"We have logged in as {self.user}")
-        print("Bot ready")
+        logging.info(f"We have logged in as {self.user}")
+        logging.info("Bot ready")
         # Updating class defaults after the bot initiates
         self.post_channel = self.get_channel(self.post_channel)
         self.command_group = CommandGroup(
@@ -56,7 +58,7 @@ class RedditBotManager(commands.Bot):
         await self.add_cog(self.command_group)  # Add command group to the bot
 
         # Initializing Reddit Monitor
-        print("Initializing Reddit Monitor")
+        logging.info("Initializing Reddit Monitor")
         await self.reddit_monitor.initialize()
 
         # Start automatic updates if enabled
@@ -94,6 +96,50 @@ class RedditBotManager(commands.Bot):
                 )
 
         # Ensure other commands still work
+        # Do not process bot's own messages to prevent loops or unintended reactions to its own posts
+        if message.author == self.user:
+            return
+
+        if message.channel.id == self.post_channel.id:
+            # Check if message has attachments or embeds and no GIFs
+            # Simplified condition: message has attachments OR (message has embeds AND not a GIF URL in common services)
+            # This is a heuristic for "not a GIF". A more robust check might involve inspecting embed types or content_type.
+            is_gif_url_in_embed = False
+            if message.embeds:
+                for embed in message.embeds:
+                    if embed.url and ("giphy.com" in embed.url or "tenor.com" in embed.url or embed.url.endswith(".gif")):
+                        is_gif_url_in_embed = True
+                        break
+                    if embed.image and embed.image.url and embed.image.url.endswith(".gif"):
+                         is_gif_url_in_embed = True
+                         break
+
+
+            has_relevant_content = (message.attachments or message.embeds)
+            is_not_gif = "gif" not in message.content.lower() and not is_gif_url_in_embed
+
+            if has_relevant_content and is_not_gif:
+                emoji_name_list = [
+                    "rate_0", "CherryTomato", "GreenPepper", "YellowPepper",
+                    "CarolinaReaper", "FIRE",
+                ]
+                # Fetch emojis by names using the message's channel as context for guild
+                emoji_list = [
+                    await self.command_group.get_emoji_by_name(message.channel, emoji_name)
+                    for emoji_name in emoji_name_list
+                ]
+                # Filter out None emojis if any failed to fetch
+                valid_emojis = [e for e in emoji_list if e]
+                if valid_emojis:
+                    await self.command_group.add_reactions_to_message(
+                        message,
+                        valid_emojis,  # Add reactions to the message
+                    )
+                else:
+                    logging.warning(f"No valid emojis found to react to message {message.id} in {message.channel.name}")
+
+
+        # Ensure other commands still work
         await super().on_message(message)
 
     @tasks.loop(seconds=20)
@@ -102,7 +148,7 @@ class RedditBotManager(commands.Bot):
         if self.post_channel:
             await self.command_group.execute_checknow(self.post_channel)
         else:
-            print("Channel not found.")
+            logging.warning("Post channel not found for checknow task.")
 
     checknow_task.before_loop
 
@@ -206,13 +252,38 @@ class CommandGroup(commands.Cog):
         if self.supabase:
             self.supabase.database_ids = self.supabase.get_post_ids()
 
+    async def _create_post_embed(self, parsed_content: dict, is_gallery: bool = False):
+        """Helper function to create a Discord embed for a Reddit post."""
+        try:
+            embed = discord.Embed(
+                title=parsed_content["Title"],
+                description=f"New post by {parsed_content['Author']}",
+                url=parsed_content["Link"],
+                color=0x00FF00,  # Green
+            )
+            if is_gallery:
+                # For galleries, the image is set later after mosaic creation
+                pass
+            else:
+                # For single image/link posts, set image directly if available
+                # Assuming "Link" can be an image or a webpage. If it's a direct image link:
+                embed.set_image(url=parsed_content["Link"])
+            return embed
+        except KeyError as e:
+            logging.error(f"Missing key in parsed content for embed creation: {e}. Content: {parsed_content}")
+            return None
+        except Exception as e:
+            logging.error(f"Error creating embed: {e}. Content: {parsed_content}")
+            return None
+
     async def publish_content(self, post_content: dict, ctx):
         """
         Publish content to a Discord channel based on Reddit posts.
 
         Args:
             post_content (dict): A dictionary where keys are post IDs and values are content strings.
-            ctx: The context from which the command was invoked, providing the channel to send messages.
+            ctx: The context (discord.ext.commands.Context or discord.TextChannel) 
+                 for sending messages.
 
         Returns:
             None
@@ -220,115 +291,97 @@ class CommandGroup(commands.Cog):
         Raises:
             Any exceptions related to Discord API or content processing.
         """
-        # List of emoji names used for reactions
         emoji_name_list = [
-            "rate_0",
-            "CherryTomato",
-            "GreenPepper",
-            "YellowPepper",
-            "CarolinaReaper",
-            "FIRE",
+            "rate_0", "CherryTomato", "GreenPepper", "YellowPepper",
+            "CarolinaReaper", "FIRE",
         ]
+        # Determine the actual channel to send messages to, supporting both Context and TextChannel
+        target_channel = ctx.channel if isinstance(ctx, commands.Context) else ctx
+        if not target_channel:
+            logging.error("Target channel is None, cannot publish content.")
+            return
+
         emoji_list = [
-            await self.get_emoji_by_name(ctx, emoji_name)
+            await self.get_emoji_by_name(target_channel, emoji_name) # Use target_channel for guild context
             for emoji_name in emoji_name_list
         ]
+        # Filter out None emojis if any failed to fetch
+        emoji_list = [e for e in emoji_list if e]
+
+
         for post_id, content_str in post_content.items():
-            if post_id not in self.posted_ids:
-                parsed_content = await self.parse_reddit_post(content_str)
-                if 'Link' not in list(parsed_content.keys()): # no link available; skip
-                    continue
-                if "Images" in parsed_content:
-                    embedVar, attachment_file = await self.embed_gallery(parsed_content)
-                    if embedVar:
-                        message = await ctx.send(embed=embedVar, file=attachment_file)
+            if post_id in self.posted_ids:
+                logging.info(f"Post ID {post_id} already published. Skipping.")
+                continue
+
+            parsed_content = await self.parse_reddit_post(content_str)
+            if not parsed_content or 'Link' not in parsed_content:
+                logging.warning(f"Failed to parse content or missing link for post ID {post_id}. Skipping.")
+                continue
+
+            message_to_send = None
+            attachment_file = None
+            embed_var = None
+
+            if "Images" in parsed_content and parsed_content["Images"]:
+                embed_var = await self._create_post_embed(parsed_content, is_gallery=True)
+                if embed_var:
+                    image_list = parsed_content["Images"] # This is already a list from parse_reddit_post
+                    if isinstance(image_list, str): # ensure it's a list
+                        image_list = image_list.split(" ")
+                    
+                    buf = await mosaic_maker(image_list)
+                    if buf:
+                        attachment_file = discord.File(buf, filename="combined.png")
+                        embed_var.set_image(url="attachment://combined.png")
+                    else: # Mosaic creation failed, or no images after parsing
+                        logging.warning(f"Mosaic maker failed for post ID {post_id}. Sending without gallery image.")
+                        # Optionally, send without image or skip
+                        # embed_var = await self._create_post_embed(parsed_content, is_gallery=False) # Fallback to non-gallery
+            else:
+                embed_var = await self._create_post_embed(parsed_content)
+
+            if not embed_var:
+                logging.error(f"Embed creation failed for post ID {post_id}. Skipping.")
+                continue
+
+            try:
+                if attachment_file:
+                    message_to_send = await target_channel.send(embed=embed_var, file=attachment_file)
                 else:
-                    embedVar = await self.embed_post(parsed_content)
-                    if embedVar:
-                        message = await ctx.send(embed=embedVar)
-                if message: #if post was succesfully posted
-                    await self.add_reactions_to_message(message, emoji_list)
-                    self.published_posts.append(
-                        {
-                            "id": post_id,
-                            "title": parsed_content["Title"],
-                            "author": parsed_content["Author"],
-                        }
-                    )
-        if self.supabase:
-            self.supabase.insert_entries(self.published_posts)
-        else:
-            self.update_posted_ids()
+                    message_to_send = await target_channel.send(embed=embed_var)
+            except discord.Forbidden:
+                logging.error(f"Bot lacks permissions to send messages in channel {target_channel.name} ({target_channel.id}). Post ID: {post_id}")
+                continue # Skip this post
+            except discord.HTTPException as e:
+                logging.error(f"Failed to send message for post ID {post_id}: {e}. Status: {e.status}, Code: {e.code}")
+                continue # Skip this post
+            except Exception as e:
+                logging.error(f"An unexpected error occurred while sending message for post ID {post_id}: {e}")
+                continue
 
-    async def embed_gallery(self, parsed_content: dict):
-        """
-        Create an embed for a gallery of images from a Reddit post.
 
-        Args:
-            parsed_content (dict): The parsed content from the Reddit post containing images.
+            if message_to_send:
+                try:
+                    await self.add_reactions_to_message(message_to_send, emoji_list)
+                except Exception as e:
+                    logging.error(f"Failed to add reactions to message for post ID {post_id}: {e}")
 
-        Returns:
-            embedVar: A Discord embed object.
-            composite_file: A Discord file object of the combined images, or None if no images.
+                self.published_posts.append({
+                    "id": post_id,
+                    "title": parsed_content.get("Title", "N/A"),
+                    "author": parsed_content.get("Author", "N/A"),
+                })
 
-        Raises:
-            Any exceptions related to image processing.
-        """
-        try:
-            embedVar = discord.Embed(
-                title=parsed_content["Title"],
-                description=f"New post by {parsed_content['Author']}",
-                url=parsed_content["Link"],
-                color=0x00FF00,
-            )
-        except KeyError as e:
-            print(f"Missing key in parsed content: {e}")
-            print(f"Item Content: {parsed_content}")
-            return None,None
-        except Exception as e:
-            print(f"error creating embeded content;\n{e}")
-            print(f"Item Content: {parsed_content}")
-            return None,None
-        
-        image_list = parsed_content["Images"].split(" ")
+        if self.published_posts: #Only update if there are new posts
+            if self.supabase:
+                self.supabase.insert_entries(self.published_posts)
+            else:
+                self.update_posted_ids()
+            self.published_posts.clear() # Clear after processing to avoid re-processing
 
-        # Fetch images and create a composite if necessary
-        buf = await mosaic_maker(image_list)
-        if buf:
-            composite_file = discord.File(buf, filename="combined.png")
-            embedVar.set_image(url="attachment://combined.png")
-        else:
-            composite_file = None
-        return embedVar, composite_file
-
-    async def embed_post(self, parsed_content):
-        """
-        Create an embed for a single post.
-
-        Args:
-            parsed_content: The parsed content of the Reddit post.
-
-        Returns:
-            embedVar: A Discord embed object.
-
-        Raises:
-            Any exceptions related to the embed creation.
-        """
-        try:
-            embedVar = discord.Embed(
-                title=parsed_content["Title"],
-                description=f"New post by {parsed_content['Author']}",
-                url=parsed_content["Link"],
-                color=0x00FF00,
-            )
-            embedVar.set_image(url=parsed_content["Link"])
-            return embedVar
-        except Exception as e:
-            print('Error creating embed content')
-            return None
-        
-        
-        
+    # Removed embed_gallery and embed_post as their logic is integrated into publish_content 
+    # and _create_post_embed helper
 
     async def parse_reddit_post(self, content):
         """
@@ -374,11 +427,20 @@ class CommandGroup(commands.Cog):
         Raises:
             None
         """
-        guild = ctx.guild
+        # ctx can be a Context object or a Channel object for on_message
+        if isinstance(ctx, commands.Context):
+            guild = ctx.guild
+        elif isinstance(ctx, discord.TextChannel): # Added for on_message context
+            guild = ctx.guild
+        else: # Fallback or error if context is unexpected
+            guild = None 
+            logging.warning(f"Unexpected context type for get_emoji_by_name: {type(ctx)}")
+
         if guild:
             for emoji in guild.emojis:
                 if emoji.name == emoji_name:
                     return emoji
+        logging.warning(f"Emoji '{emoji_name}' not found in guild '{guild.name if guild else 'N/A'}'.")
         return None
 
     async def add_reactions_to_message(self, message, emoji_list):
@@ -395,8 +457,22 @@ class CommandGroup(commands.Cog):
         Raises:
             Any exceptions related to the Discord API.
         """
+        if not emoji_list: # Don't attempt if list is empty (e.g. all emojis failed to fetch)
+            return
         for emoji in emoji_list:
-            await message.add_reaction(emoji)
+            if emoji: # Ensure emoji object is valid
+                try:
+                    await message.add_reaction(emoji)
+                except discord.Forbidden:
+                    logging.error(f"Bot lacks permissions to add reactions in channel {message.channel.name} ({message.channel.id}). Emoji: {emoji.name}")
+                    break # Stop trying if permissions are missing for one
+                except discord.HTTPException as e:
+                    logging.warning(f"Failed to add reaction {emoji.name}: {e}. Status: {e.status}, Code: {e.code}")
+                except Exception as e:
+                    logging.error(f"An unexpected error occurred while adding reaction {emoji.name}: {e}")
+            else:
+                logging.warning("Attempted to add a None emoji to a message.")
+
 
     def _get_local_ids(self):
         """
