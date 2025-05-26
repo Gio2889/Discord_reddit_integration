@@ -1,13 +1,12 @@
 import os
 import discord
+import json
 from datetime import datetime,timedelta,timezone
 from discord.ext import commands, tasks
 from utils.RedditMonitor import RedditMonitor
 from utils.mosaic_maker import mosaic_maker
 from utils.SB_connector import SupabaseConnector
-
-
-
+import requests
 class RedditBotManager(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -18,7 +17,8 @@ class RedditBotManager(commands.Bot):
         intents.reactions = True
         self.auto_post = True
         self.reddit_monitor = RedditMonitor()
-        self.supabase = SupabaseConnector()
+        self.supabase = None
+        #self.supabase = SupabaseConnector()
         self.post_channel = int(
             os.getenv("DISCORD_POST_CHANNEL")
         )  # has been changed to ID
@@ -68,13 +68,47 @@ class RedditBotManager(commands.Bot):
         await self.reddit_monitor.close()
         await super().close()
 
-
 class CommandGroup(commands.Cog):
     def __init__(self, reddit_monitor, supabase, authorised_channel):
         self.reddit_monitor = reddit_monitor
         self.supabase = supabase
         self.published_posts = []
         self.authorised_channel = authorised_channel
+
+    def _decompose_attachment(self,data: str) -> str:
+        """
+        Decomposes a string representation of an attachment into a JSON-like format.
+        
+        Args:
+            data (str): The input string containing attachment information.
+            
+        Returns:
+            str: A JSON-like string representation of the attachment.
+        """
+        # Extracting the information
+        id_start = data.find('id=') + len('id=')
+        id_end = data.find(' ', id_start)
+        id_value = data[id_start:id_end].strip()
+
+        filename_start = data.find('filename=\'') + len('filename=\'')
+        filename_end = data.find('\'', filename_start)
+        filename_value = data[filename_start:filename_end].strip()
+
+        url_start = data.find('url=\'') + len('url=\'')
+        url_end = data.find('\'', url_start)
+        url_value = data[url_start:url_end].strip()
+
+        # Creating the JSON structure
+        json_data = {
+            "Attachment": {
+                "id": id_value,
+                "filename": filename_value,
+                "url": url_value
+            }
+        }
+        # Return the JSON string
+        return json_data
+        #return json.dumps(json_data, indent=2)
 
     @commands.command(name="hello")
     async def hello(self, ctx):
@@ -88,56 +122,78 @@ class CommandGroup(commands.Cog):
             return
         await self.execute_checknow(ctx)
 
-    @commands.command(name="fetch_images_reactions")
+    @commands.command(name="fetch")
     async def fetch_images_reactions(self, ctx, days: int):
         """Fetch all images and reactions from the last 'days' days."""
-        if ctx.channel.id != self.authorised_channel.id:
-            await ctx.send("I'm not authorized to retrieve messages from this channel.")
-            return
+        print("Fetching images")
+        #uncomment later
+        # if ctx.channel.id != self.authorised_channel.id:
+        #     await ctx.send("I'm not authorized to retrieve messages from this channel.")
+        #     return
 
         # Calculate the cut-off time
-        cut_off_time = datetime.now(timezone.utc) - timedelta(days=3)
-        print(cut_off_time)
-        image_reactions = []
-        messages=[]
-        async for message in ctx.channel.history(limit=100): # Adjust limit as necessary
-            messages.append(
-                {
-                "msg" : message.content,
-                "timestmp" : message.created_at,
-                "reactions" : message.reactions,
-                "attch" : message.attachments,
-                "embeds" : message.embeds,
-                "pic link" : message.content.endswith((".jpg",".jpeg",".png"))
-                }
-            )
+        cut_off_time = datetime.now(timezone.utc) - timedelta(days=days)
+        image_reactions = {}
+        rating_dict = {}
+        async for message in ctx.history(limit=None): # Adjust limit as necessary
             if message.created_at > cut_off_time:
-                if message.embeds:  # Check if there are embeds
-                    for embed in message.embeds:
-                        if str(embed.url).endswith
-                        print(dir(embed))
-                        print(f"{message.id} is wihtin the time frame and has an embed")
-                        print(embed.type)
-                        print(embed.url)
-                        print(embed.title)
-                        print(embed.set_image)
-                        if embed.type == 'image':
-                            
-                            image_url = embed.url  # Get image URL
-                            reactions = self.collect_reactions(message)  # Collect reactions
-                            image_reactions.append({
-                                'image_url': image_url,
-                                'reactions': reactions
-                            })
+                reactions = await self.collect_reactions(message)  # Collect reactions
+                rating = await self.rate_image(reactions)
+                
+                if rating != '-': # image was rated on the scale ie good image 
+                    if message.embeds:  # Check if there are embed
+                        l=0
+                        for embed in message.embeds: 
+                            if embed.image.url is not None:
+                                if embed.type == 'rich' and embed.image.url.endswith((".jpg",".jpeg",".png",".webp")):
+                                    extention = embed.image.url.split(".")[-1].split("/")[-1]
+                                    type = f"image/{extention}"
+                                    image_url = embed.url 
+                                    image_reactions[message.id]={
+                                        'file' : embed.title,
+                                        'image_url': image_url,
+                                        'reactions': reactions,
+                                        'type' :type
+                                    }
+                                    await self.download_image(str(message.id),str(l),image_url,extention,'D:/DiscordBotTrainingSet/images')
+                                    extention= type.split("/")[-1]        
+                                    rating_dict[f"{message.id}_{l}.{extention}"] = rating
+                            l+1
 
+                    if message.attachments: # Check if there are attachements
+                        l=0
+                        for attachment in message.attachments:
+                            #attachment_info = self._decompose_attachment(attachment)
+                            filename = attachment.filename
+                            image_url = attachment.url
+                            type = attachment.content_type
+                            if type == 'image/gif':
+                                continue
+                            else:
+                                extention = attachment.content_type.split("/")[-1]
+                                await self.download_image(str(message.id),str(l),image_url,extention,'D:/DiscordBotTrainingSet/images')
+                            image_reactions[message.id] = {
+                                        'file' : filename,
+                                        'image_url': image_url,
+                                        'reactions': reactions,
+                                        'type' :  type
+                                    }
+                            extention= type.split("/")[-1]        
+                            rating_dict[f"{message.id}_{l}.{extention}"] = rating
+                            l+=1
+                            
+                    
+                        
         # Send a summary of images and their reactions
-        if image_reactions:
-            await ctx.send(f"Found {len(image_reactions)} images in the last {days} days.")
-            for item in image_reactions:
-                await ctx.send(f"Image: {item['image_url']}\nReactions: {item['reactions']}")
+        if rating_dict:
+            #await ctx.send(f"Found {len(image_reactions)} images in the last {days} days.")
+            print(f"Found {len(rating_dict)} images in the last {days} days.")
+            with open('D:/DiscordBotTrainingSet/scores.json','w') as f:
+                json.dump(rating_dict,f,indent=4)
+                #await ctx.send(f"Image: {item['image_url']}\nReactions: {item['reactions']}")
         else:
-            await ctx.send(f"No images found in the last {days} days.")
-        # [print(f"{message}\n") for  message in messages]
+            print(f"No images found in the last {days} days.")
+            #await ctx.send(f"No images found in the last {days} days.")
 
     async def execute_checknow(self, ctx):
         """Logic for check now. With this separation can now be called outside."""
@@ -238,9 +294,61 @@ class CommandGroup(commands.Cog):
                     current_key = None
         return results
 
-    def collect_reactions(self, message):
+    async def collect_reactions(self, message):
             """Collects reaction counts from the given message."""
             reaction_data = {}
             for reaction in message.reactions:
                 reaction_data[reaction.emoji] = reaction.count
             return reaction_data
+    
+    async def download_image(self, id: str ,idx:str, image_url: str, extention: str,output_path : str= "downloaded_images"):
+        # Download the image
+        filename = os.path.join(output_path, f"{id}_{idx}.{extention}")
+        if os.path.isfile(filename):
+            print(f'File with id: {id} already exists. Skipping download.')
+            return
+        # Get the image content
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            # Save the image to a file
+            filename = os.path.join(output_path,f"{id}_{idx}.{extention}")
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, 'wb') as f:
+                f.write(response.content)
+            print(f'Downloaded file with id: {id}_{idx}')
+        else:
+            print('Failed to download image.')\
+            
+    async def rate_image(self,emoji_dict : dict,scale : dict = None):
+        if scale is None:
+            scale = {
+                'FIRE' : 10,
+                'CarolinaReaper' : 8,
+                'YellowPepper' : 6,
+                'GreenPepper' : 4,
+                'CherryTomato': 2,
+                'rate_0': 0
+            };
+        valid_emojis = [key for key in scale.keys()]
+        rating_sum, count = 0, 0
+        
+        # Check if all emojis in scale are present in emoji_dict
+        all_emojis_present = all(emoji in emoji_dict for emoji in valid_emojis)
+
+        for emoji, emoji_counts in emoji_dict.items():
+            if hasattr(emoji, 'name') and emoji.name in valid_emojis:
+                # If all emojis are present, skip counting for the first appearance
+                if all_emojis_present and count == 0:
+                    emoji_counts-=1  # We we
+                
+                rating_sum += emoji_counts * scale[emoji.name]
+                count += emoji_counts
+
+        if count == 0:
+            if emoji_dict.get('rate_0', 0) > 0:  # Check for 'rate_0' emoji count
+                return 0
+            return "-"  # Return "-" for no valid emojis
+        else: 
+            return rating_sum / count
+                
+
